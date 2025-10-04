@@ -31,7 +31,7 @@ A complete hardware and software solution to convert PlayStation DualShock contr
 ```
 PlayStation Controller → Arduino Pro Micro
 =====================================
-Pin 1 (DATA)        → Pin 14 (MISO) via Level Shifter
+Pin 1 (DATA)        → Pin 14 (MISO) via Level Shifter + 10kΩ Pull-up to 3.3V
 Pin 2 (CMD)         → Pin 16 (MOSI) via Level Shifter  
 Pin 3 (VCC-rumble)  → 5V or better 8V for Rumble Motors
 Pin 4 (GND)         → GND
@@ -39,8 +39,13 @@ Pin 5 (VCC)         → 3.3V from Step-Down Module
 Pin 6 (ATT)         → Pin 10 (SS) via Level Shifter
 Pin 7 (CLK)         → Pin 15 (SCK) via Level Shifter
 Pin 8 (n/c)         → Not Connected
-Pin 9 (ACK)         → Pin 9 via Level Shifter
 ```
+
+### ⚠️ Critical Hardware Requirements
+- **10kΩ Pull-up Resistor**: REQUIRED on DATA line (Pin 1) connected to 3.3V
+- **Level Shifter**: All control signals must go through 5V ↔ 3.3V level conversion
+- **ACK Signal**: NOT needed - removed from current implementation for simplicity
+- **Stable 3.3V**: Step-down module must provide clean 3.3V for reliable communication
 
 ## Software Setup
 
