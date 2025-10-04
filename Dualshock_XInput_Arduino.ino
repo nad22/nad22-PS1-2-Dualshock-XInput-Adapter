@@ -26,7 +26,7 @@ const int PS2_ATT = 10;  // Attention/Select (SS)
 const int PS2_CMD = 16;  // Command (MOSI)
 const int PS2_DAT = 14;  // Data (MISO)  
 const int PS2_CLK = 15;  // Clock (SCK)
-const int PS2_ACK = 9;   // Acknowledge (optional)
+// Note: ACK signal not needed - PlayStation controllers work fine with 4-wire SPI
 
 const uint8_t CMD_POLL = 0x42;
 const uint8_t CMD_CONFIG_MODE = 0x43;
@@ -213,12 +213,12 @@ void pollController() {
  * - Performs startup rumble test (0.5 seconds)
  */
 void setup() {
-    // Configure PlayStation controller communication pins
+    // Configure PlayStation controller communication pins (4-wire SPI)
     pinMode(PS2_ATT, OUTPUT);        // Attention signal (chip select)
     pinMode(PS2_CMD, OUTPUT);        // Command data (MOSI)
     pinMode(PS2_DAT, INPUT_PULLUP);  // Controller data (MISO) with pull-up
     pinMode(PS2_CLK, OUTPUT);        // Clock signal
-    pinMode(PS2_ACK, INPUT);         // Acknowledge signal (unused)
+    // ACK signal omitted - not required for reliable PlayStation communication
     
     // Set pins to idle state
     digitalWrite(PS2_ATT, HIGH);     // Attention inactive (high)
