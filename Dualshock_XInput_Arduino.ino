@@ -34,13 +34,18 @@ const uint8_t CMD_SET_MODE = 0x44;
 const uint8_t CMD_VIBRATION = 0x4D;
 const uint8_t CMD_EXIT_CONFIG = 0x43;
 
-const unsigned long POLL_INTERVAL = 20;
+const unsigned long POLL_INTERVAL = 8;  // 125Hz for minimum latency (was 20ms/50Hz)
 
 uint8_t ps2Data[21];
 unsigned long lastPollTime = 0;
 uint16_t lastButtons = 0xFFFF;
 uint8_t rumbleLarge = 0;
 uint8_t rumbleSmall = 0;
+
+// Performance optimization: Track analog stick changes
+static uint8_t lastAnalogLX = 128, lastAnalogLY = 128;
+static uint8_t lastAnalogRX = 128, lastAnalogRY = 128;
+static uint8_t pollCounter = 0;
 
 const uint16_t PS2_SELECT   = 0x0001;
 const uint16_t PS2_L3       = 0x0002;
@@ -71,30 +76,30 @@ const uint16_t PS2_SQUARE   = 0x8000;
 uint8_t spiTransfer(uint8_t data) {
     uint8_t result = 0;
     
-    // Transmit 8 bits (LSB first, as per PlayStation protocol)
-    for (int i = 0; i < 8; i++) {
+    // Optimized timing: Reduced from 2µs to 1µs for faster communication
+    for (uint8_t i = 0; i < 8; i++) {
         // Set clock low
         digitalWrite(PS2_CLK, LOW);
-        delayMicroseconds(2);
+        delayMicroseconds(1);  // Reduced delay for speed
         
         // Transmit bit (LSB first)
         digitalWrite(PS2_CMD, (data & (1 << i)) ? HIGH : LOW);
-        delayMicroseconds(2);
+        delayMicroseconds(1);  // Reduced delay for speed
         
         // Set clock high and read response bit
         digitalWrite(PS2_CLK, HIGH);
-        delayMicroseconds(2);
+        delayMicroseconds(1);  // Reduced delay for speed
         
         // Read incoming bit from controller
         if (digitalRead(PS2_DAT)) {
             result |= (1 << i);
         }
-        delayMicroseconds(2);
+        delayMicroseconds(1);  // Reduced delay for speed
     }
     
     // Keep clock high (idle state)
     digitalWrite(PS2_CLK, HIGH);
-    delayMicroseconds(10);
+    delayMicroseconds(5);  // Reduced inter-byte delay
     
     return result;
 }
@@ -178,9 +183,9 @@ void enableAnalogMode() {
  * - Updates global ps2Data array with controller state
  */
 void pollController() {
-    // Start communication (attention signal)
+    // Start communication (attention signal) - optimized timing
     digitalWrite(PS2_ATT, LOW);
-    delayMicroseconds(10);
+    delayMicroseconds(5);  // Reduced from 10µs for faster polling
     
     // Exchange 9 bytes with controller
     ps2Data[0] = spiTransfer(0x01);        // Start byte
@@ -193,8 +198,8 @@ void pollController() {
     ps2Data[7] = spiTransfer(0x00);        // Right analog stick X
     ps2Data[8] = spiTransfer(0x00);        // Right analog stick Y
     
-    // End communication
-    delayMicroseconds(10);
+    // End communication - optimized timing
+    delayMicroseconds(5);  // Reduced from 10µs for faster response
     digitalWrite(PS2_ATT, HIGH);
 }
 
@@ -227,14 +232,24 @@ void setup() {
     enableAnalogMode();             // Configure PlayStation controller for analog mode and rumble
     delay(500);                     // Allow configuration to complete
     
-    // Perform startup rumble test (0.5 seconds)
-    // Tests both motors to verify functionality
+    // Perform startup rumble test - sequential motor test
+    // First test right motor (small motor) for 200ms
     rumbleSmall = 0x01;            // Enable small motor (right motor)
-    rumbleLarge = 0xFF;            // Enable large motor at full intensity (left motor)
-    for (int i = 0; i < 25; i++) { // 0.5 seconds = 25 × 20ms polling cycles
+    rumbleLarge = 0x00;            // Keep large motor off
+    for (int i = 0; i < 25; i++) { // 200ms = 25 × 8ms polling cycles
         pollController();
-        delay(20);
+        delay(8);
     }
+    
+    // Then test left motor (large motor) for 200ms  
+    rumbleSmall = 0x00;            // Turn off small motor
+    rumbleLarge = 0xFF;            // Enable large motor at full intensity (left motor)
+    for (int i = 0; i < 25; i++) { // 200ms = 25 × 8ms polling cycles
+        pollController();
+        delay(8);
+    }
+    
+    // Turn off both motors
     rumbleSmall = 0x00;            // Disable rumble motors
     rumbleLarge = 0x00;
 }
@@ -249,68 +264,69 @@ void setup() {
  * - Map PlayStation controller data to Xbox 360 controller format
  */
 void loop() {
-    unsigned long currentTime = millis();
-    
-    // Poll controller at 50Hz (every 20ms)
-    if (currentTime - lastPollTime >= POLL_INTERVAL) {
-        lastPollTime = currentTime;
-        pollController();
+    // Reduce millis() calls: only check every few iterations
+    if (++pollCounter >= 4) {  // Check timing every 4th iteration
+        pollCounter = 0;
+        unsigned long currentTime = millis();
         
-        // Handle separate rumble motor control from XInput host
-        uint8_t leftMotor = XInput.getRumbleLeft();   // Large motor (variable intensity 0-255)
-        uint8_t rightMotor = XInput.getRumbleRight(); // Small motor (on/off only)
-        
-        // Map XInput rumble to PlayStation controller format
-        rumbleSmall = (rightMotor > 0) ? 0x01 : 0x00;  // Small motor: digital on/off
-        rumbleLarge = leftMotor;                        // Large motor: PWM value 0-255
-        
-        // Parse button states from PlayStation controller response
-        uint16_t buttons = (ps2Data[4] << 8) | ps2Data[3];
-        
-        // Update XInput button states only when changes occur
-        if (buttons != lastButtons) {
-            lastButtons = buttons;
+        // Poll controller at 125Hz (every 8ms) for minimum latency
+        if (currentTime - lastPollTime >= POLL_INTERVAL) {
+            lastPollTime = currentTime;
             
-            // Map PlayStation face buttons to Xbox layout
-            XInput.setButton(BUTTON_A, !(buttons & PS2_CROSS));      // Cross → A
-            XInput.setButton(BUTTON_B, !(buttons & PS2_CIRCLE));     // Circle → B
-            XInput.setButton(BUTTON_X, !(buttons & PS2_SQUARE));     // Square → X
-            XInput.setButton(BUTTON_Y, !(buttons & PS2_TRIANGLE));   // Triangle → Y
+            // Get rumble values before polling (reduces XInput calls)
+            uint8_t leftMotor = XInput.getRumbleLeft();
+            uint8_t rightMotor = XInput.getRumbleRight();
+            rumbleSmall = (rightMotor > 0) ? 0x01 : 0x00;
+            rumbleLarge = leftMotor;
             
-            // Map shoulder buttons
-            XInput.setButton(BUTTON_LB, !(buttons & PS2_L1));        // L1 → Left Bumper
-            XInput.setButton(BUTTON_RB, !(buttons & PS2_R1));        // R1 → Right Bumper
+            pollController();
             
-            // Map analog stick clicks
-            XInput.setButton(BUTTON_L3, !(buttons & PS2_L3));        // L3 → Left Stick
-            XInput.setButton(BUTTON_R3, !(buttons & PS2_R3));        // R3 → Right Stick
+            // Parse button states from PlayStation controller response
+            uint16_t buttons = (ps2Data[4] << 8) | ps2Data[3];
             
-            // Map menu buttons
-            XInput.setButton(BUTTON_BACK, !(buttons & PS2_SELECT));  // Select → Back
-            XInput.setButton(BUTTON_START, !(buttons & PS2_START));  // Start → Start
+            // Update XInput button states only when changes occur
+            if (buttons != lastButtons) {
+                lastButtons = buttons;
+                
+                // Map PlayStation buttons to Xbox layout - optimized boolean logic
+                XInput.setButton(BUTTON_A, !(buttons & PS2_CROSS));
+                XInput.setButton(BUTTON_B, !(buttons & PS2_CIRCLE));
+                XInput.setButton(BUTTON_X, !(buttons & PS2_SQUARE));
+                XInput.setButton(BUTTON_Y, !(buttons & PS2_TRIANGLE));
+                XInput.setButton(BUTTON_LB, !(buttons & PS2_L1));
+                XInput.setButton(BUTTON_RB, !(buttons & PS2_R1));
+                XInput.setButton(BUTTON_L3, !(buttons & PS2_L3));
+                XInput.setButton(BUTTON_R3, !(buttons & PS2_R3));
+                XInput.setButton(BUTTON_BACK, !(buttons & PS2_SELECT));
+                XInput.setButton(BUTTON_START, !(buttons & PS2_START));
+                
+                // D-pad mapping
+                XInput.setDpad(!(buttons & PS2_UP), !(buttons & PS2_DOWN), 
+                             !(buttons & PS2_LEFT), !(buttons & PS2_RIGHT));
+                
+                // Shoulder triggers
+                XInput.setTrigger(TRIGGER_LEFT, (buttons & PS2_L2) ? 0 : 255);
+                XInput.setTrigger(TRIGGER_RIGHT, (buttons & PS2_R2) ? 0 : 255);
+            }
             
-            // Map D-pad buttons
-            XInput.setDpad(
-                !(buttons & PS2_UP),     // D-pad Up
-                !(buttons & PS2_DOWN),   // D-pad Down
-                !(buttons & PS2_LEFT),   // D-pad Left
-                !(buttons & PS2_RIGHT)   // D-pad Right
-            );
+            // Optimized analog stick processing: Only update when values change
+            uint8_t analogLX = ps2Data[7], analogLY = ps2Data[8];
+            uint8_t analogRX = ps2Data[5], analogRY = ps2Data[6];
             
-            // Map shoulder triggers (L2/R2 as digital buttons → analog triggers)
-            uint8_t lt = (buttons & PS2_L2) ? 0 : 255;    // L2 pressed = full trigger
-            uint8_t rt = (buttons & PS2_R2) ? 0 : 255;    // R2 pressed = full trigger
-            XInput.setTrigger(TRIGGER_LEFT, lt);
-            XInput.setTrigger(TRIGGER_RIGHT, rt);
+            if (analogLX != lastAnalogLX || analogLY != lastAnalogLY) {
+                lastAnalogLX = analogLX; lastAnalogLY = analogLY;
+                // Fast mapping: ((value - 128) * 512) for -32768 to +32767 range
+                int16_t lx = ((int16_t)analogLX - 128) << 8;
+                int16_t ly = -((int16_t)analogLY - 128) << 8;  // Inverted Y
+                XInput.setJoystick(JOY_LEFT, lx, ly);
+            }
+            
+            if (analogRX != lastAnalogRX || analogRY != lastAnalogRY) {
+                lastAnalogRX = analogRX; lastAnalogRY = analogRY;
+                int16_t rx = ((int16_t)analogRX - 128) << 8;
+                int16_t ry = -((int16_t)analogRY - 128) << 8;  // Inverted Y
+                XInput.setJoystick(JOY_RIGHT, rx, ry);
+            }
         }
-        
-        // Update analog stick positions (always update for smooth movement)
-        int16_t lx = map(ps2Data[7], 0, 255, -32768, 32767);  // Left stick X
-        int16_t ly = map(ps2Data[8], 0, 255, 32767, -32768);  // Left stick Y (inverted)
-        int16_t rx = map(ps2Data[5], 0, 255, -32768, 32767);  // Right stick X
-        int16_t ry = map(ps2Data[6], 0, 255, 32767, -32768);  // Right stick Y (inverted)
-        
-        XInput.setJoystick(JOY_LEFT, lx, ly);   // Set left analog stick
-        XInput.setJoystick(JOY_RIGHT, rx, ry);  // Set right analog stick
     }
 }
