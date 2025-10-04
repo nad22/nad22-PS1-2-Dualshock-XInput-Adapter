@@ -153,7 +153,6 @@ The Arduino IDE's hardware SPI implementation differs from PlatformIO, causing c
 Dualshock_XInput_Arduino/
 ├── Dualshock_XInput_Arduino.ino    # Main Arduino sketch
 ├── README.md                       # This documentation
-└── ANLEITUNG.md                    # German setup guide
 ```
 
 ### Key Functions
